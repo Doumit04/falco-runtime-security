@@ -17,8 +17,6 @@
 
 > Custom [Falco](https://falco.org) rules that detect suspicious behaviour on a Linux host: privilege escalation, reconnaissance, and attacks on the monitoring itself. Every rule was tested with a deliberate trigger, its noise was measured in normal use, and its limits are documented.
 
-**Context:** midterm project for *Administration Unix*, Master in Systems and Networks (Information Security option), Saint Joseph University of Beirut (USJ). Supervised by Prof. Fadi Chebli, October 2026.
-
 ---
 
 ## Table of contents
@@ -55,7 +53,32 @@
 
 Falco watches the **system calls** that programs make to the Linux kernel and compares each one with a set of rules. When a rule matches, Falco writes an alert.
 
-![How one event becomes an alert: program, kernel, Falco driver, rules engine, alert](images/falco_flow.png)
+```mermaid
+flowchart TD
+    P["<b>Program</b><br/>a process runs or opens a file"]
+    K["<b>Linux kernel</b><br/>executes the system call"]
+    D["<b>Falco driver</b><br/>modern eBPF (falco-modern-bpf)"]
+    R["<b>Rules engine</b><br/>default rules + custom rules A to D"]
+    A["<b>Alert</b><br/>written to the journal / log"]
+    P -->|system call| K
+    K -->|copy of the event| D
+    D -->|events| R
+    R -->|rule matches| A
+    N["<b>Detection only (IDS)</b><br/>the alert comes after the action, nothing is blocked"]
+    A -.-> N
+    classDef prog fill:#57606A,stroke:#24292F,color:#ffffff,stroke-width:2px
+    classDef kern fill:#1F3A5F,stroke:#0B1F3A,color:#ffffff,stroke-width:2px
+    classDef drv fill:#2E75B6,stroke:#1B4F82,color:#ffffff,stroke-width:2px
+    classDef eng fill:#0E8FA5,stroke:#086373,color:#ffffff,stroke-width:2px
+    classDef alert fill:#C0392B,stroke:#8E2A20,color:#ffffff,stroke-width:2px
+    classDef note fill:#EEF4FA,stroke:#2E75B6,color:#1F3A5F,stroke-width:2px,stroke-dasharray:5 3
+    class P prog
+    class K kern
+    class D drv
+    class R eng
+    class A alert
+    class N note
+```
 
 Falco is a **detection** tool (an IDS): it works on a copy of the event, so the alert comes **after** the action, and it never blocks anything.
 
