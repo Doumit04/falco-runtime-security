@@ -54,17 +54,17 @@
 Falco watches the **system calls** that programs make to the Linux kernel and compares each one with a set of rules. When a rule matches, Falco writes an alert.
 
 ```mermaid
-flowchart TD
-    P["<b>Program</b><br/>a process runs or opens a file"]
-    K["<b>Linux kernel</b><br/>executes the system call"]
-    D["<b>Falco driver</b><br/>modern eBPF (falco-modern-bpf)"]
-    R["<b>Rules engine</b><br/>default rules + custom rules A to D"]
-    A["<b>Alert</b><br/>written to the journal / log"]
+flowchart LR
+    P["<b>Program</b><br/>runs or opens<br/>a file"]
+    K["<b>Linux kernel</b><br/>executes the<br/>system call"]
+    D["<b>Falco driver</b><br/>modern eBPF"]
+    R["<b>Rules engine</b><br/>default + custom<br/>rules (A to D)"]
+    A["<b>Alert</b><br/>journal / log"]
     P -->|system call| K
     K -->|copy of the event| D
     D -->|events| R
     R -->|rule matches| A
-    N["<b>Detection only (IDS)</b><br/>the alert comes after the action, nothing is blocked"]
+    N["<b>Detection only (IDS)</b>: the alert comes after the action, nothing is blocked"]
     A -.-> N
     classDef prog fill:#57606A,stroke:#24292F,color:#ffffff,stroke-width:2px
     classDef kern fill:#1F3A5F,stroke:#0B1F3A,color:#ffffff,stroke-width:2px
