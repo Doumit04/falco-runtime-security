@@ -1,0 +1,197 @@
+# Your custom rules!
+
+# Exception: the GNOME login manager session worker reads PAM and shadow
+# files while a user logs in. Verified with dpkg -S and dpkg -V gdm3.
+- macro: user_known_read_sensitive_files_activities
+  condition: (proc.exepath = "/usr/libexec/gdm-session-worker" or (proc.exepath = "/usr/bin/pkexec" and proc.pexepath = "/usr/bin/update-notifier"))
+  override:
+    condition: replace
+
+
+# Rule A (custom): a file gets the setuid or setgid bit.
+# Attackers use this to plant a privileged backdoor, so Falco alerts on it.
+- rule: Setuid or setgid bit set on a file
+  desc: >
+    A file was given the setuid or setgid bit, so it now runs with the rights
+    of its owner or group. Attackers use this to plant privileged backdoors.
+  condition: >
+    evt.type in (chmod, fchmod, fchmodat)
+    and (evt.arg.mode contains "S_ISUID" or evt.arg.mode contains "S_ISGID")
+    and not (run_by_package_mgmt_binaries
+      and (evt.arg.filename startswith "/bin/" or evt.arg.filename startswith "/sbin/"
+      or evt.arg.filename startswith "/usr/bin/" or evt.arg.filename startswith "/usr/sbin/"
+      or evt.arg.filename startswith "/usr/lib/" or evt.arg.filename startswith "/usr/libexec/"))
+  output: >
+    Setuid or setgid bit set on a file | filename=%evt.arg.filename fd=%fd.name
+    mode=%evt.arg.mode user=%user.name user_uid=%user.uid
+    user_loginuid=%user.loginuid process=%proc.name proc_exepath=%proc.exepath
+    parent=%proc.pname gparent=%proc.aname[2] ggparent=%proc.aname[3] gggparent=%proc.aname[4] command=%proc.cmdline terminal=%proc.tty
+  priority: WARNING
+  tags: [host, filesystem, mitre_privilege_escalation, T1548.001]
+
+
+# Rule B (custom): a network scanner tool is started on the host.
+# Reconnaissance: an attacker who is inside looks for open ports and services.
+- list: network_scanner_binaries
+  items: [nmap, masscan, zmap, hping3, nping, unicornscan, nc, ncat, netcat, nc.openbsd, nc.traditional]
+
+- rule: Network scanner started by a non-root login
+  desc: >
+    A network scanning tool was started by an account that did not log in as
+    root, or by a process with no login behind it, such as a service. Nobody on
+    a normal machine needs a port scanner, so this is treated as urgent.
+  condition: >
+    spawned_process and proc.name in (network_scanner_binaries)
+    and user.loginuid != 0
+  output: >
+    Network scanner started by a non-root login | user=%user.name
+    user_uid=%user.uid user_loginuid=%user.loginuid process=%proc.name
+    proc_exepath=%proc.exepath parent=%proc.pname gparent=%proc.aname[2]
+    ggparent=%proc.aname[3] gggparent=%proc.aname[4] command=%proc.cmdline
+    terminal=%proc.tty exe_flags=%evt.arg.flags
+  priority: CRITICAL
+  tags: [host, network, mitre_discovery, T1046]
+
+- rule: Network scanner started by a root login
+  desc: >
+    A network scanning tool was started by an account that logged in as root.
+    It is reported at a lower level, but it is still reported.
+  condition: >
+    spawned_process and proc.name in (network_scanner_binaries)
+    and user.loginuid = 0
+  output: >
+    Network scanner started by a root login | user=%user.name
+    user_uid=%user.uid user_loginuid=%user.loginuid process=%proc.name
+    proc_exepath=%proc.exepath parent=%proc.pname gparent=%proc.aname[2]
+    ggparent=%proc.aname[3] gggparent=%proc.aname[4] command=%proc.cmdline
+    terminal=%proc.tty exe_flags=%evt.arg.flags
+  priority: WARNING
+  tags: [host, network, mitre_discovery, T1046]
+
+
+# Rule C2 (custom): a Falco configuration or rules file is written.
+# Defense evasion: an attacker blinds Falco by editing its rules or its configuration.
+- rule: Falco configuration or rules file written
+  desc: >
+    A program opened a file under /etc/falco/ for writing. An attacker can blind
+    Falco by editing its rules or configuration, for example to disable a rule.
+    Legitimate writers (the update helper falcoctl, package updates, an
+    administrator) also appear, and are tuned after they have been measured.
+  condition: >
+    open_write and fd.name startswith "/etc/falco/"
+    and not (proc.exepath = "/usr/bin/nano" and fd.name endswith ".swp")
+  output: >
+    Falco configuration or rules file written | file=%fd.name user=%user.name
+    user_uid=%user.uid user_loginuid=%user.loginuid process=%proc.name
+    proc_exepath=%proc.exepath parent=%proc.pname gparent=%proc.aname[2]
+    ggparent=%proc.aname[3] gggparent=%proc.aname[4] command=%proc.cmdline
+    terminal=%proc.tty
+  priority: WARNING
+  tags: [host, filesystem, mitre_defense_evasion, T1562.001]
+
+
+# Rule C1 (custom): a denied attempt to write a Falco configuration or rules file.
+# Defense evasion: someone without the rights is trying to change Falco's rules.
+- rule: Denied write attempt on a Falco configuration or rules file
+  desc: >
+    A program tried to open a file under /etc/falco/ for writing and the kernel
+    refused. These files belong to root, so an ordinary account that tries to
+    change them is probing, and is treated as urgent.
+  condition: >
+    evt.type in (open, openat, openat2) and evt.is_open_write=true
+    and evt.res startswith E and fs.path.name startswith "/etc/falco/"
+  output: >
+    Denied write attempt on a Falco file | file=%fs.path.name evt_res=%evt.res
+    user=%user.name user_uid=%user.uid user_loginuid=%user.loginuid
+    process=%proc.name proc_exepath=%proc.exepath parent=%proc.pname
+    gparent=%proc.aname[2] ggparent=%proc.aname[3] gggparent=%proc.aname[4]
+    command=%proc.cmdline terminal=%proc.tty
+  priority: CRITICAL
+  tags: [host, filesystem, mitre_defense_evasion, T1562.001]
+
+
+# Rule C3 (custom): a Falco configuration or rules file is renamed, moved or deleted.
+# Defense evasion: an attacker replaces or removes Falco's rules without writing to them.
+- rule: Falco configuration or rules file renamed or deleted
+  desc: >
+    A file under /etc/falco/ was renamed, moved into place, or deleted. A write
+    is not needed for this, so the rule that watches writes does not see it.
+  condition: >
+    (evt.type in (rename, renameat, renameat2) and
+     (fs.path.target startswith "/etc/falco/" or fs.path.source startswith "/etc/falco/"))
+    or
+    (evt.type in (unlink, unlinkat, rmdir) and fs.path.name startswith "/etc/falco/")
+  output: >
+    Falco file renamed or deleted | evt=%evt.type source=%fs.path.source
+    target=%fs.path.target file=%fs.path.name user=%user.name
+    user_uid=%user.uid user_loginuid=%user.loginuid process=%proc.name
+    proc_exepath=%proc.exepath parent=%proc.pname gparent=%proc.aname[2]
+    ggparent=%proc.aname[3] gggparent=%proc.aname[4] command=%proc.cmdline
+    terminal=%proc.tty
+  priority: WARNING
+  tags: [host, filesystem, mitre_defense_evasion, T1562.001]
+
+# Rule C4 (custom): the Falco service is stopped, disabled or masked.
+# Defense evasion: if the service is stopped, nothing is watched any more.
+- rule: Falco service stopped or disabled
+  desc: >
+    systemctl was used to stop, disable, mask or kill a Falco service. Nobody
+    has a normal reason to do this, even as root, because it switches off the
+    monitoring. Restarts are not reported.
+  condition: >
+    spawned_process and proc.name = systemctl
+    and proc.cmdline contains "falco"
+    and (proc.cmdline contains " stop" or proc.cmdline contains " disable"
+    or proc.cmdline contains " mask" or proc.cmdline contains " kill")
+  output: >
+    Falco service stopped or disabled | user=%user.name user_uid=%user.uid
+    user_loginuid=%user.loginuid process=%proc.name proc_exepath=%proc.exepath
+    parent=%proc.pname gparent=%proc.aname[2] ggparent=%proc.aname[3]
+    gggparent=%proc.aname[4] command=%proc.cmdline terminal=%proc.tty
+  priority: ALERT
+  tags: [host, process, mitre_defense_evasion, T1562.001]
+
+
+# Rule D (custom): an attack tool is started on the host.
+# Two groups: password-cracking tools and break-in toolkits.
+- list: password_cracking_binaries
+  items: [john, hashcat, hydra, medusa, ncrack]
+
+- list: exploitation_toolkit_binaries
+  items: [msfconsole, msfvenom, sqlmap]
+
+- list: attack_tool_binaries
+  items: [password_cracking_binaries, exploitation_toolkit_binaries]
+
+- rule: Attack tool started by a non-root login
+  desc: >
+    A password-cracking tool or a break-in toolkit was started by an account that
+    did not log in as root, or by a process with no login behind it. Nobody on a
+    normal machine needs these tools, so this is treated as urgent.
+  condition: >
+    spawned_process and proc.name in (attack_tool_binaries)
+    and user.loginuid != 0
+  output: >
+    Attack tool started by a non-root login | user=%user.name
+    user_uid=%user.uid user_loginuid=%user.loginuid process=%proc.name
+    proc_exepath=%proc.exepath parent=%proc.pname gparent=%proc.aname[2]
+    ggparent=%proc.aname[3] gggparent=%proc.aname[4] command=%proc.cmdline
+    terminal=%proc.tty
+  priority: ALERT
+  tags: [host, process]
+
+- rule: Attack tool started by a root login
+  desc: >
+    A password-cracking tool or a break-in toolkit was started by an account that
+    logged in as root. It is reported at a lower level, but it is still reported.
+  condition: >
+    spawned_process and proc.name in (attack_tool_binaries)
+    and user.loginuid = 0
+  output: 
+    Attack tool started by a root login | user=%user.name
+    user_uid=%user.uid user_loginuid=%user.loginuid process=%proc.name
+    proc_exepath=%proc.exepath parent=%proc.pname gparent=%proc.aname[2]
+    ggparent=%proc.aname[3] gggparent=%proc.aname[4] command=%proc.cmdline
+    terminal=%proc.tty
+  priority: CRITICAL
+  tags: [host, process]
