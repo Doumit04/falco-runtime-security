@@ -55,13 +55,7 @@
 
 Falco watches the **system calls** that programs make to the Linux kernel and compares each one with a set of rules. When a rule matches, Falco writes an alert.
 
-```mermaid
-flowchart LR
-    A[Program] -->|system call| B[Linux kernel]
-    B -->|copy of the event| C[Falco driver<br/>modern eBPF]
-    C --> D[Rules engine<br/>default + custom rules]
-    D -->|match| E[Alert<br/>journald / log]
-```
+![How one event becomes an alert: program, kernel, Falco driver, rules engine, alert](images/falco_flow.png)
 
 Falco is a **detection** tool (an IDS): it works on a copy of the event, so the alert comes **after** the action, and it never blocks anything.
 
